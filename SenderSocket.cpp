@@ -65,6 +65,7 @@ DWORD SenderSocket::Open(string targetHost, int port, int senderWindow, LinkProp
     DWORD serverIP = inet_addr(targetHost.c_str());
     if (serverIP == INADDR_NONE) {
         if ((remote = gethostbyname(targetHost.c_str())) == NULL) {
+            printf(" [ %.3f] --> target %s in invalid\n", TIME_SINCE_START, targetHost.c_str());
             closesocket(sock);
             WSACleanup();
             return INVALID_NAME;
@@ -151,7 +152,7 @@ DWORD SenderSocket::doSYNACK(SenderSynHeader* packet) {
             continue;
         }
         else if (available < 0) {
-            printf(" [ %.3f] --> failed recvfrom with %d\n", TIME_SINCE_START, WSAGetLastError());
+            printf(" [ %.3f] <-- failed recvfrom with %d\n", TIME_SINCE_START, WSAGetLastError());
             return FAILED_RECV;
         }
 
@@ -168,7 +169,7 @@ DWORD SenderSocket::doSYNACK(SenderSynHeader* packet) {
             &synAddrSize);
 
         if (synBytes < 0) {
-            printf(" [ %.3f] --> failed recvfrom with %d\n", TIME_SINCE_START, WSAGetLastError());
+            printf(" [ %.3f] <-- failed recvfrom with %d\n", TIME_SINCE_START, WSAGetLastError());
             return FAILED_RECV;
         }
 
@@ -231,7 +232,7 @@ DWORD SenderSocket::doFINACK() {
             continue;
         }
         else if (available < 0) {
-            printf(" [ %.3f] --> failed recvfrom with %d\n", TIME_SINCE_START, WSAGetLastError());
+            printf(" [ %.3f] <-- failed recvfrom with %d\n", TIME_SINCE_START, WSAGetLastError());
             return FAILED_RECV;
         }
 
@@ -248,7 +249,7 @@ DWORD SenderSocket::doFINACK() {
             &synAddrSize);
 
         if (synBytes < 0) {
-            printf(" [ %.3f] --> failed recvfrom with %d\n", TIME_SINCE_START, WSAGetLastError());
+            printf(" [ %.3f] <-- failed recvfrom with %d\n", TIME_SINCE_START, WSAGetLastError());
             return FAILED_RECV;
         }
 
