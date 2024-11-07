@@ -24,12 +24,18 @@
     <ClCompile Include="SenderSocket.cpp">
       <Filter>Header Files</Filter>
     </ClCompile>
+    <ClCompile Include="checksum.cpp">
+      <Filter>Header Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SenderSocket.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="checksum.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

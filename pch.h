@@ -15,5 +15,6 @@
 #include <Windows.h>
 #include <algorithm>
 #include <ctime>
+#include <thread>
 
 #endif //PCH_H

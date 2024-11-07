@@ -1,8 +1,11 @@
 
 #include "pch.h"
 #include "SenderSocket.h"
+#include "checksum.h"
 
 using namespace std;
+
+bool debugMode = false;
 
 int main(int argv, char** argc)
 {
@@ -45,7 +48,7 @@ int main(int argv, char** argc)
     DWORD* dwordBuf = new DWORD[dwordBufSize]; // user-requested buffer
     for (UINT64 i = 0; i < dwordBufSize; i++) // required initialization
         dwordBuf[i] = i;
-    SenderSocket ss; // instance of your class
+    SenderSocket ss(debugMode); // instance of your class
 
     printf(" done in %.0f ms\n", TIME_SINCE_START * 1000);
 
@@ -53,7 +56,7 @@ int main(int argv, char** argc)
         printf("Main:\tconnect failed with status %d\n", status);
         return -1;
     }
-    printf("Main: connected to %s in %.3f sec, packet size %d bytes\n", 
+    printf("Main:\tconnected to %s in %.3f sec, packet size %d bytes\n", 
         targetHost.c_str(), 
         TIME_SINCE_START, 
         MAX_PKT_SIZE);
@@ -62,7 +65,7 @@ int main(int argv, char** argc)
     UINT64 byteBufferSize = dwordBufSize << 2; // convert to bytes
     UINT64 off = 0; // current position in buffer
     clock_t processStartTime = clock();
-
+    
     while (off < byteBufferSize)
     {
         // decide the size of next chunk
@@ -75,12 +78,23 @@ int main(int argv, char** argc)
         // error handing: print status and quit
         off += bytes;
     }
-
+    
     double timeSinceStart = (double)TIME_SINCE(processStartTime);
-
-    if ((status = ss.Close()) != STATUS_OK) {
+    //double elapsedTime = timeSinceStart;
+    if ((status = ss.Close(&timeSinceStart)) != STATUS_OK) {
         printf("Main:\tdisconnect failed with status %d\n", status);
         return -1;
     }
-    printf("Main:\ttransfer finished in %.3f sec", timeSinceStart);
+
+    Checksum cs;
+
+    printf("Main:\ttransfer finished in %.3f sec, %.2f Kbps, checksum %X\n", 
+        timeSinceStart, 
+        (double)dwordBufSize * 32 / (double)(1000 * timeSinceStart),
+        cs.CRC32((unsigned char*)charBuf, byteBufferSize));
+
+
+    printf("Main:\testRTT %.3f, ideal rate %.2f Kbps\n", 
+        ss.estimatedRTT, 
+        8 * (MAX_PKT_SIZE - sizeof(SenderDataHeader)) / (ss.estimatedRTT * 1000));
 }
