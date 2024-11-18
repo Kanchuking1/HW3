@@ -12,9 +12,12 @@
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 #include <iostream>
 #include <string>
+#include <WinSock2.h>
 #include <Windows.h>
 #include <algorithm>
 #include <ctime>
 #include <thread>
+#include <queue>
+#include <mutex>
 
 #endif //PCH_H

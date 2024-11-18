@@ -65,7 +65,7 @@ int main(int argv, char** argc)
     UINT64 byteBufferSize = dwordBufSize << 2; // convert to bytes
     UINT64 off = 0; // current position in buffer
     clock_t processStartTime = clock();
-    
+
     while (off < byteBufferSize)
     {
         // decide the size of next chunk
