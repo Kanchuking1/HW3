@@ -411,11 +411,8 @@ DWORD SenderSocket::ReceiveACK() {
 
     if (flag) recomputeTimerExpire();
 
-    if (packetsRemaining == 0 && closeCalled) {
+    if (packetsRemaining == 0 && closeCalled && senderBase == nextSeq) {
         SetEvent(eventQuit);
-    }
-    else {
-        ResetEvent(eventQuit);
     }
 
     return STATUS_OK;
@@ -442,7 +439,7 @@ DWORD WINAPI SenderSocket::statsThread(LPVOID self) {
     while (true) {
         this_thread::sleep_for(chrono::seconds(TIME_BETWEEN_STAT));
         bitsSinceLastPrint = (double)((ss->senderBase - previousSeqNo) * 8 * (MAX_PKT_SIZE - sizeof(SenderDataHeader)));
-        printf("[%3.0f] B %5d ( %.1f MB ) N %5d T %2d F %d W %d S %0.3f Mbps RTT %.3f\n",
+        printf(" [%3.0f] B %5d ( %.1f MB ) N %5d T %2d F %d W %d S %0.3f Mbps RTT %.3f\n",
             floor(TIME_SINCE(ss->startTime)),
             ss->senderBase,
             (double)(ss->bytesAcked / 1e6),
