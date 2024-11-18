@@ -5,7 +5,7 @@
 
 using namespace std;
 
-bool debugMode = false;
+bool debugMode = true;
 
 int main(int argv, char** argc)
 {
@@ -80,7 +80,6 @@ int main(int argv, char** argc)
     }
     
     double timeSinceStart = (double)TIME_SINCE(processStartTime);
-    //double elapsedTime = timeSinceStart;
     if ((status = ss.Close(&timeSinceStart)) != STATUS_OK) {
         printf("Main:\tdisconnect failed with status %d\n", status);
         return -1;

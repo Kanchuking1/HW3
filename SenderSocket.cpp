@@ -35,7 +35,6 @@ SenderSocket::~SenderSocket() {
     CloseHandle(socketReceiveReady);
     CloseHandle(eventQuit);
     CloseHandle(worker);
-    CloseHandle(stats);
 }
 #pragma endregion
 
@@ -54,7 +53,7 @@ DWORD SenderSocket::Open(string targetHost, int port, int senderWindow, LinkProp
     }
 
     // Initialize Semaphores and Events and WSASelectEvent
-    empty = CreateSemaphore(NULL, senderWindow, senderWindow, NULL);
+    empty = CreateSemaphore(NULL, 0, senderWindow, NULL);
     full = CreateSemaphore(NULL, 0, senderWindow, NULL);
 
     eventQuit = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -189,8 +188,8 @@ DWORD SenderSocket::doSYNACK() {
     int available = 0;
 
     for (int i = 1; i <= MAX_SYN_ATTEMPTS; i++) {
-        printOutput&& printf(" [ %.3f] --> ", TIME_SINCE_START);
-        printOutput&& printf("SYN 0 (attempt %d of %d, RTO %.3f) to %s\n",
+        printOutput && printf(" [ %.3f] --> ", TIME_SINCE_START);
+        printOutput && printf("SYN 0 (attempt %d of %d, RTO %.3f) to %s\n",
             i,
             MAX_SYN_ATTEMPTS,
             RTO,
@@ -213,7 +212,11 @@ DWORD SenderSocket::doSYNACK() {
         FD_ZERO(&fdRead);
         FD_SET(sock, &fdRead);
 
-        available = WaitForSingleObject(socketReceiveReady, (DWORD)(RTO * 1000));
+        timeval timeout;
+        timeout.tv_sec = floor(RTO);
+        timeout.tv_usec = (RTO - floor(RTO)) * 1e6;
+
+        available = select(0, &fdRead, NULL, NULL, &timeout);
 
         if (available == 0) {
             continue;
@@ -248,6 +251,9 @@ DWORD SenderSocket::doSYNACK() {
         estimatedRTT = RTO;
 
         if (synResponse->flags.SYN == 1 && synResponse->flags.ACK == 1) {
+            lastReleased = min(senderWindow, synResponse->recvWnd);
+            //effectiveWin = lastReleased;
+            ReleaseSemaphore(empty, lastReleased, NULL);
             printOutput&& printf(" [ %.3f] <-- SYN-ACK 0 window %d; setting initial RTO to %.3f\n",
                 TIME_SINCE_START,
                 synResponse->recvWnd,
@@ -378,14 +384,16 @@ DWORD SenderSocket::ReceiveACK() {
         mLock.unlock();
         updateRTO(TIME_SINCE((PACKET_IN_BUFFER((y - 1) % senderWindow))->txTime));
         effectiveWin = min(senderWindow, response->recvWnd);
+
         bytesAcked += MAX_PKT_SIZE * diff;
 
          //how much we can advance the semaphore
-        /*int newReleased = senderBase + effectiveWin - lastReleased;
+        int newReleased = senderBase + effectiveWin - lastReleased;
 
         lastReleased += newReleased;
-        ReleaseSemaphore(empty, newReleased, NULL);*/
-        ReleaseSemaphore(empty, diff, NULL);
+        ReleaseSemaphore(empty, newReleased, NULL);
+        //printf("releasing %d\n", newReleased);
+        //ReleaseSemaphore(empty, diff, NULL);
         flag = true;
     }
     else if (y == senderBase) {
@@ -409,7 +417,6 @@ DWORD SenderSocket::ReceiveACK() {
     else {
         ResetEvent(eventQuit);
     }
-    //printCurrentSequenceNumbers();
 
     return STATUS_OK;
 }
@@ -420,7 +427,6 @@ DWORD SenderSocket::SendDataPkt(Packet* p) {
     if (sendto(sock, (char*)&(p->pkt), p->size, 0, (sockaddr*)&server, sizeof(server)) == SOCKET_ERROR) {
         return FAILED_SEND;
     }
-    lastReleased = max(p->pkt.sdh.seq, lastReleased);
 }
 
 void SenderSocket::recomputeTimerExpire() {
@@ -453,7 +459,6 @@ DWORD WINAPI SenderSocket::statsThread(LPVOID self) {
 DWORD WINAPI SenderSocket::WorkerRun(LPVOID self)
 {
     SenderSocket* ss = (SenderSocket*)self;
-    //WSAEventSelect(ss->sock, ss->socketReceiveReady, FD_READ);
     HANDLE events[] = { ss->socketReceiveReady, ss->full };
     int kernelBuffer = 20e6;
     if (setsockopt(ss->sock, SOL_SOCKET, SO_RCVBUF, (char*)&kernelBuffer, sizeof(int)) == SOCKET_ERROR) {
@@ -479,10 +484,6 @@ DWORD WINAPI SenderSocket::WorkerRun(LPVOID self)
         {
             // TIMEOUT
             case WAIT_TIMEOUT:
-                //if (ss->nextSeq > ss->senderWindow) {
-                //    //ss->printSendPkt(&((Packet*)(ss->pending_pkts))[ss->senderBase % ss->senderWindow]);
-                //}
-                //ss->printCurrentSequenceNumbers();
                 ss->timeoutCount++;
                 ss->SendDataPkt(&((Packet*)(ss->pending_pkts))[ss->senderBase % ss->senderWindow]);
                 ss->recomputeTimerExpire();
@@ -494,9 +495,8 @@ DWORD WINAPI SenderSocket::WorkerRun(LPVOID self)
                 break;
             // SENDER
             case WAIT_OBJECT_0 + 1: 
-                // sendto(pending_pkts[nextToSend % senderWindow].pkt);
-                //if (ss->nextToSend >= ss->nextSeq - 1) break;
-                ss->SendDataPkt(&((Packet*)(ss->pending_pkts))[(ss->lastReleased + 1) % ss->senderWindow]);
+                ss->SendDataPkt(&((Packet*)(ss->pending_pkts))[(ss->nextToSend) % ss->senderWindow]);
+                ss->nextToSend++;
                 break;
             // HANDLE FAILED WAIT
             default:

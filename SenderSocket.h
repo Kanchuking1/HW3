@@ -112,7 +112,7 @@ class SenderSocket {
 	char* pending_pkts; // Circular Queue
 	int packetsRemaining;
 	int effectiveWin;
-	int lastReleased; // Last pkt that was sent
+	int lastReleased; // Number of packets released
 	int nextToSend; // Next Packet to be sent
 	
 	double RTO;
