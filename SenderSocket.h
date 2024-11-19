@@ -23,7 +23,7 @@ using namespace std;
 
 #define MAGIC_PROTOCOL		0x8311AA
 
-#define MAX_SYN_ATTEMPTS	3
+#define MAX_SYN_ATTEMPTS	50
 #define MAX_FIN_ATTEMPTS	50
 #define MAX_SEND_ATTEMPTS	50
 
@@ -149,6 +149,7 @@ class SenderSocket {
 
 	bool closeCalled;
 	bool finSent;
+	bool rtx;
 public: 
 	clock_t startTime;
 	double estimatedRTT;

@@ -1,7 +1,7 @@
 /* 
     Submission for HW3P3
     Wahib Sabir Kapdi 635009343
-    
+
 */
 #include "pch.h"
 #include "SenderSocket.h"
@@ -26,6 +26,7 @@ SenderSocket::SenderSocket(bool printOutput) {
     nextToSend = 0;
     closeCalled = false;
     finSent = false;
+    rtx = false;
 
     this->printOutput = printOutput;
 }
@@ -91,29 +92,31 @@ DWORD SenderSocket::Send(char* buffer, int bufferSize)
     //return STATUS_OK;
 
     HANDLE arr[] = { eventQuit, empty };
-    int r = WaitForMultipleObjects(2, arr, FALSE, 5 * RTO * 1000);
-
-    if (r == WAIT_TIMEOUT) {
-        if ((!closeCalled) && packetsRemaining == 0) {
-            ReleaseSemaphore(empty, 1, NULL);
-        }
+    int r = WaitForMultipleObjects(2, arr, FALSE, INFINITE);
+    // no need for mutex as no shared variables are modified
+    int slot = nextSeq % senderWindow;
+    int replacingSeq = (int)(PACKET_IN_BUFFER(slot))->pkt.sdh.seq;
+    printOutput && printf("Adding %d with base %d at position %d replacing %d\n",
+        nextSeq,
+        senderBase,
+        slot,
+        replacingSeq);
+    if (senderBase == replacingSeq && replacingSeq != 0) {
+        printf("Something is going wrong\n");
+        exit(1);
     }
-    else {
-        // no need for mutex as no shared variables are modified
-        int slot = nextSeq % senderWindow;
-        Packet* p = ((Packet*)(pending_pkts)) + slot;  // pointer to packet struct
-        SenderData* pkt = new SenderData();
-        pkt->sdh.seq = nextSeq;
-        p->type = 1;
-        p->size = bufferSize + sizeof(SenderDataHeader);
-        memcpy(pkt->data, buffer, bufferSize);
-        memcpy(&(p->pkt), pkt, sizeof(SenderData));
-        nextSeq++;
-        mLock.lock();
-        packetsRemaining++;
-        mLock.unlock();
-        ReleaseSemaphore(full, 1, NULL);
-    }
+    Packet* p = ((Packet*)(pending_pkts)) + slot;  // pointer to packet struct
+    SenderData* pkt = new SenderData();
+    pkt->sdh.seq = nextSeq;
+    p->type = 1;
+    p->size = bufferSize + sizeof(SenderDataHeader);
+    memcpy(pkt->data, buffer, bufferSize);
+    memcpy(&(p->pkt), pkt, sizeof(SenderData));
+    nextSeq++;
+    mLock.lock();
+    packetsRemaining++;
+    mLock.unlock();
+    ReleaseSemaphore(full, 1, NULL);
 
     return STATUS_OK;
 }
@@ -317,7 +320,6 @@ DWORD SenderSocket::doFINACK(double* timeElapsed) {
             continue;
         }
         else if (available < 0) {
-            printCurrentSequenceNumbers();
             printOutput&& printf(" [ %.3f] <-- failed recvfrom with %d\n", TIME_SINCE_START, WSAGetLastError());
             if (i == MAX_FIN_ATTEMPTS) {
                 return FAILED_RECV;
@@ -338,7 +340,6 @@ DWORD SenderSocket::doFINACK(double* timeElapsed) {
             &synAddrSize);
 
         if (synBytes < 0) {
-            printCurrentSequenceNumbers();
             printOutput&& printf(" [ %.3f] <-- failed recvfrom with %d\n", TIME_SINCE_START, WSAGetLastError());
             if (i == MAX_FIN_ATTEMPTS) {
                 return FAILED_RECV;
@@ -381,7 +382,8 @@ DWORD SenderSocket::ReceiveACK() {
 
     //printReceivedPkt(response);
     int y = response->ackSeq;
-    if (y > senderBase) {
+    printReceivedPkt(response);
+    if (y > senderBase && y <= (senderBase + senderWindow)) {
         int diff = y - senderBase;
         //printf("Set Base to %d from %d and nextSeq %d\n", y, senderBase, nextSeq);
         senderBase = y;
@@ -391,35 +393,42 @@ DWORD SenderSocket::ReceiveACK() {
         packetsRemaining -= diff;
         mLock.unlock();
 
-        updateRTO(TIME_SINCE((PACKET_IN_BUFFER((y - 1) % senderWindow))->txTime));
+        if (!rtx) updateRTO(TIME_SINCE((PACKET_IN_BUFFER((y - 1) % senderWindow))->txTime));
+        rtx = false;
         effectiveWin = min(senderWindow, response->recvWnd);
-        //printf("Receiver Window at Base %d : %d\n", senderBase, response->recvWnd);
 
         bytesAcked += (double)(MAX_PKT_SIZE * diff);
 
          //how much we can advance the semaphore
         int newReleased = senderBase + effectiveWin - lastReleased;
 
+        printOutput && printf("*** Releasing : lr %d nr %d\n",
+            lastReleased,
+            newReleased);
         lastReleased += newReleased;
         ReleaseSemaphore(empty, newReleased, NULL);
         //printf("releasing %d\n", newReleased);
         //ReleaseSemaphore(empty, diff, NULL);
         flag = true;
+        recomputeTimerExpire();
     }
     else if (y == senderBase) {
         dupACK++;
         if (dupACK == 3) {
-            dupACK = 0;
+            printOutput && cout << "DupACK : ";
             SendDataPkt(PACKET_IN_BUFFER(senderBase % senderWindow));
             fastRetxCount++;
+            rtx = true;
+            recomputeTimerExpire();
             flag = true;
         }
     }
     else {
+        printOutput && cout << "Ye kya Bakwaas hai?\n" << endl;
         return -1;
     }
 
-    if (flag) recomputeTimerExpire();
+    //if (flag) recomputeTimerExpire()
 
     if (packetsRemaining == 0 && closeCalled && senderBase == nextSeq) {
         SetEvent(eventQuit);
@@ -430,14 +439,14 @@ DWORD SenderSocket::ReceiveACK() {
 
 DWORD SenderSocket::SendDataPkt(Packet* p) {
     p->txTime = clock();
-    //printOutput && printf("Sending Pkt with Seq: %d\n", p->pkt.sdh.seq);
+    printSendPkt(p);
     if (sendto(sock, (char*)&(p->pkt), p->size, 0, (sockaddr*)&server, sizeof(server)) == SOCKET_ERROR) {
         return FAILED_SEND;
     }
 }
 
 void SenderSocket::recomputeTimerExpire() {
-    timerExpire = (PACKET_IN_BUFFER(senderBase % senderWindow))->txTime + (clock_t)(RTO * CLOCKS_PER_SEC);
+    timerExpire = clock() + (clock_t)(RTO * CLOCKS_PER_SEC);
 }
 #pragma endregion
 
@@ -485,8 +494,10 @@ DWORD WINAPI SenderSocket::WorkerRun(LPVOID self)
     while (true)
     {
         DWORD timeout = INFINITE;
-        if (!(ss->closeCalled)) {
-            ss->recomputeTimerExpire();
+        if (!(ss->senderBase == ss->nextSeq)) {
+            if (ss->timerExpire < clock()) {
+                ss->recomputeTimerExpire();
+            }
             timeout = ss->timerExpire - clock();
         }
         else
@@ -496,9 +507,12 @@ DWORD WINAPI SenderSocket::WorkerRun(LPVOID self)
         {
             // TIMEOUT
             case WAIT_TIMEOUT:
+                //ss->printCurrentSequenceNumbers();
                 ss->timeoutCount++;
+                ss->printOutput && cout << "Retransmit : ";
                 ss->SendDataPkt(&((Packet*)(ss->pending_pkts))[ss->senderBase % ss->senderWindow]);
                 ss->recomputeTimerExpire();
+                ss->rtx = true;
                 break;
             // SOCKET
             case WAIT_OBJECT_0:
@@ -507,6 +521,7 @@ DWORD WINAPI SenderSocket::WorkerRun(LPVOID self)
                 break;
             // SENDER
             case WAIT_OBJECT_0 + 1: 
+                ss->printOutput && cout << "Sending Next Packet : ";
                 ss->SendDataPkt(&((Packet*)(ss->pending_pkts))[(ss->nextToSend) % ss->senderWindow]);
                 ss->nextToSend++;
                 break;
@@ -527,22 +542,17 @@ void SenderSocket::printReceivedPkt(ReceiverHeader* response) {
     if (!printOutput) {
         return;
     }
-    printf("recvWnd: %d, seq: %d, FIN: %d, SYN: %d, ACK: %d\n",
-        response->recvWnd,
+    printf("<-- ACK %d, recvWnd: %d\n",
         response->ackSeq,
-        response->flags.FIN,
-        response->flags.SYN,
-        response->flags.ACK);
+        response->recvWnd);
 }
 
 void SenderSocket::printSendPkt(Packet* pkt) {
     if (!printOutput) {
         return;
     }
-    printf("type: %d, seq: %d, size: %d\n",
-        pkt->type,
-        pkt->pkt.sdh.seq,
-        pkt->size);
+    printf("--> SEND %d\n",
+        pkt->pkt.sdh.seq);
 }
 
 void SenderSocket::printCurrentSequenceNumbers() {
