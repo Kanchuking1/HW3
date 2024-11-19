@@ -153,7 +153,7 @@ public:
 	clock_t startTime;
 	double estimatedRTT;
 	int synSize;
-	int bytesAcked;
+	double bytesAcked;
 	int timeoutCount;
 	int fastRetxCount;
 

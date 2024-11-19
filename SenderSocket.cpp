@@ -91,21 +91,29 @@ DWORD SenderSocket::Send(char* buffer, int bufferSize)
     //return STATUS_OK;
 
     HANDLE arr[] = { eventQuit, empty };
-    WaitForMultipleObjects(2, arr, FALSE, INFINITE);
-    // no need for mutex as no shared variables are modified
-    int slot = nextSeq % senderWindow;
-    Packet* p = ((Packet*)(pending_pkts)) + slot;  // pointer to packet struct
-    SenderData* pkt = new SenderData();
-    pkt->sdh.seq = nextSeq;
-    p->type = 1;
-    p->size = bufferSize + sizeof(SenderDataHeader);
-    memcpy(pkt->data, buffer, bufferSize);
-    memcpy(&(p->pkt), pkt, sizeof(SenderData));
-    nextSeq++;
-    mLock.lock();
-    packetsRemaining++;
-    mLock.unlock();
-    ReleaseSemaphore(full, 1, NULL);
+    int r = WaitForMultipleObjects(2, arr, FALSE, 5 * RTO * 1000);
+
+    if (r == WAIT_TIMEOUT) {
+        if ((!closeCalled) && packetsRemaining == 0) {
+            ReleaseSemaphore(empty, 1, NULL);
+        }
+    }
+    else {
+        // no need for mutex as no shared variables are modified
+        int slot = nextSeq % senderWindow;
+        Packet* p = ((Packet*)(pending_pkts)) + slot;  // pointer to packet struct
+        SenderData* pkt = new SenderData();
+        pkt->sdh.seq = nextSeq;
+        p->type = 1;
+        p->size = bufferSize + sizeof(SenderDataHeader);
+        memcpy(pkt->data, buffer, bufferSize);
+        memcpy(&(p->pkt), pkt, sizeof(SenderData));
+        nextSeq++;
+        mLock.lock();
+        packetsRemaining++;
+        mLock.unlock();
+        ReleaseSemaphore(full, 1, NULL);
+    }
 
     return STATUS_OK;
 }
@@ -387,7 +395,7 @@ DWORD SenderSocket::ReceiveACK() {
         effectiveWin = min(senderWindow, response->recvWnd);
         //printf("Receiver Window at Base %d : %d\n", senderBase, response->recvWnd);
 
-        bytesAcked += MAX_PKT_SIZE * diff;
+        bytesAcked += (double)(MAX_PKT_SIZE * diff);
 
          //how much we can advance the semaphore
         int newReleased = senderBase + effectiveWin - lastReleased;
@@ -459,7 +467,7 @@ DWORD WINAPI SenderSocket::statsThread(LPVOID self) {
 DWORD WINAPI SenderSocket::WorkerRun(LPVOID self)
 {
     SenderSocket* ss = (SenderSocket*)self;
-    HANDLE events[] = { ss->socketReceiveReady, ss->full };
+    HANDLE events[] = { ss->socketReceiveReady, ss->full, ss->eventQuit };
     int kernelBuffer = 20e6;
     if (setsockopt(ss->sock, SOL_SOCKET, SO_RCVBUF, (char*)&kernelBuffer, sizeof(int)) == SOCKET_ERROR) {
         printf("Failed to set the correct receive buffer size");
@@ -483,7 +491,7 @@ DWORD WINAPI SenderSocket::WorkerRun(LPVOID self)
         }
         else
             timeout = INFINITE;
-        int ret = WaitForMultipleObjects(2, events, FALSE, timeout);
+        int ret = WaitForMultipleObjects(3, events, FALSE, timeout);
         switch (ret)
         {
             // TIMEOUT
@@ -502,9 +510,12 @@ DWORD WINAPI SenderSocket::WorkerRun(LPVOID self)
                 ss->SendDataPkt(&((Packet*)(ss->pending_pkts))[(ss->nextToSend) % ss->senderWindow]);
                 ss->nextToSend++;
                 break;
+            // EVENT QUIT
+            case WAIT_OBJECT_0 + 2:
+                return 0;
             // HANDLE FAILED WAIT
             default:
-                cout << "handle failed wait" << endl;
+                break;
                 // handle failed wait;
         }
     }
