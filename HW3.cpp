@@ -5,7 +5,7 @@
 
 using namespace std;
 
-bool debugMode = true;
+bool debugMode = false;
 
 int main(int argv, char** argc)
 {

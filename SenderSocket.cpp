@@ -25,6 +25,7 @@ SenderSocket::SenderSocket(bool printOutput) {
     lastReleased = 0;
     nextToSend = 0;
     closeCalled = false;
+    finSent = false;
 
     this->printOutput = printOutput;
 }
@@ -34,7 +35,6 @@ SenderSocket::~SenderSocket() {
     CloseHandle(empty);
     CloseHandle(socketReceiveReady);
     CloseHandle(eventQuit);
-    CloseHandle(worker);
 }
 #pragma endregion
 
@@ -58,8 +58,6 @@ DWORD SenderSocket::Open(string targetHost, int port, int senderWindow, LinkProp
 
     eventQuit = CreateEvent(NULL, TRUE, FALSE, NULL);
     socketReceiveReady = CreateEvent(NULL, FALSE, FALSE, NULL);
-
-    WSAEventSelect(sock, socketReceiveReady, FD_READ);
 
     // Initialize SYN/FIN Packet
     synPacket = new SenderSynHeader();
@@ -103,8 +101,8 @@ DWORD SenderSocket::Send(char* buffer, int bufferSize)
     p->size = bufferSize + sizeof(SenderDataHeader);
     memcpy(pkt->data, buffer, bufferSize);
     memcpy(&(p->pkt), pkt, sizeof(SenderData));
-    mLock.lock();
     nextSeq++;
+    mLock.lock();
     packetsRemaining++;
     mLock.unlock();
     ReleaseSemaphore(full, 1, NULL);
@@ -252,7 +250,7 @@ DWORD SenderSocket::doSYNACK() {
 
         if (synResponse->flags.SYN == 1 && synResponse->flags.ACK == 1) {
             lastReleased = min(senderWindow, synResponse->recvWnd);
-            //effectiveWin = lastReleased;
+            effectiveWin = lastReleased;
             ReleaseSemaphore(empty, lastReleased, NULL);
             printOutput&& printf(" [ %.3f] <-- SYN-ACK 0 window %d; setting initial RTO to %.3f\n",
                 TIME_SINCE_START,
@@ -294,6 +292,8 @@ DWORD SenderSocket::doFINACK(double* timeElapsed) {
             printOutput&& printf(" [ %.3f] --> failed sendto with %d\n", TIME_SINCE_START, WSAGetLastError());
             return FAILED_SEND;
         }
+
+        finSent = true;
 
         fd_set fdRead;
         FD_ZERO(&fdRead);
@@ -382,8 +382,10 @@ DWORD SenderSocket::ReceiveACK() {
         mLock.lock();
         packetsRemaining -= diff;
         mLock.unlock();
+
         updateRTO(TIME_SINCE((PACKET_IN_BUFFER((y - 1) % senderWindow))->txTime));
         effectiveWin = min(senderWindow, response->recvWnd);
+        //printf("Receiver Window at Base %d : %d\n", senderBase, response->recvWnd);
 
         bytesAcked += MAX_PKT_SIZE * diff;
 
@@ -436,10 +438,10 @@ DWORD WINAPI SenderSocket::statsThread(LPVOID self) {
     SenderSocket* ss = (SenderSocket*)self;
     int previousSeqNo = 0;
     double bitsSinceLastPrint = 0;
-    while (true) {
+    while (!(ss->finSent)) {
         this_thread::sleep_for(chrono::seconds(TIME_BETWEEN_STAT));
         bitsSinceLastPrint = (double)((ss->senderBase - previousSeqNo) * 8 * (MAX_PKT_SIZE - sizeof(SenderDataHeader)));
-        printf(" [%3.0f] B %5d ( %.1f MB ) N %5d T %2d F %d W %d S %0.3f Mbps RTT %.3f\n",
+        (!(ss->finSent)) && printf(" [%3.0f] B %5d ( %.1f MB ) N %5d T %2d F %d W %d S %0.3f Mbps RTT %.3f\n",
             floor(TIME_SINCE(ss->startTime)),
             ss->senderBase,
             (double)(ss->bytesAcked / 1e6),
@@ -451,6 +453,7 @@ DWORD WINAPI SenderSocket::statsThread(LPVOID self) {
             ss->estimatedRTT);
         previousSeqNo = ss->senderBase - 1;
     }
+    return 0;
 }
 
 DWORD WINAPI SenderSocket::WorkerRun(LPVOID self)
@@ -459,13 +462,17 @@ DWORD WINAPI SenderSocket::WorkerRun(LPVOID self)
     HANDLE events[] = { ss->socketReceiveReady, ss->full };
     int kernelBuffer = 20e6;
     if (setsockopt(ss->sock, SOL_SOCKET, SO_RCVBUF, (char*)&kernelBuffer, sizeof(int)) == SOCKET_ERROR) {
-        return -1;
+        printf("Failed to set the correct receive buffer size");
+        exit(1);
     }
     kernelBuffer = 20e6;
     if (setsockopt(ss->sock, SOL_SOCKET, SO_SNDBUF, (char*)&kernelBuffer, sizeof(int)) == SOCKET_ERROR) {
-        return -1;
+        printf("Failed to set the correct receive buffer size");
+        exit(1);
     }
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+
+    WSAEventSelect(ss->sock, ss->socketReceiveReady, FD_READ);
 
     while (true)
     {

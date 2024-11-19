@@ -24,7 +24,7 @@ using namespace std;
 #define MAGIC_PROTOCOL		0x8311AA
 
 #define MAX_SYN_ATTEMPTS	3
-#define MAX_FIN_ATTEMPTS	5
+#define MAX_FIN_ATTEMPTS	50
 #define MAX_SEND_ATTEMPTS	50
 
 #define TIME_BETWEEN_STAT	2
@@ -148,6 +148,7 @@ class SenderSocket {
 	mutex mLock;
 
 	bool closeCalled;
+	bool finSent;
 public: 
 	clock_t startTime;
 	double estimatedRTT;
